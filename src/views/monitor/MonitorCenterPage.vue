@@ -78,7 +78,7 @@
               <text x="8" y="25" class="axis-value">{{ getChartStats(module).max }}</text>
               <text x="8" y="132" class="axis-value">{{ getChartStats(module).min }}</text>
               <text x="148" y="160" class="axis-title">X轴：采集时间</text>
-              <text x="14" y="86" class="axis-title vertical-axis">Y轴</text>
+              <text x="14" y="86" class="axis-title vertical-axis">{{ module.metric.label }}</text>
 
               <polyline
                 v-if="getChartPoints(module).length > 1"
@@ -238,16 +238,16 @@ const moduleConfigs = {
     },
   },
   fiber: {
-    label: "光纤原始数据",
-    shortLabel: "光纤",
+    label: "OS265 测值数据",
+    shortLabel: "OS265",
     component: "Fiber",
-    desc: "OS-265 光纤原始入口，仅做结构接入",
+    desc: "数据来源：OS265 通道数据；能量/测值用于当前业务显示，波长保留为辅助参考",
     version: "1.0",
     category: "direct",
     metric: {
       key: "rawValue",
-      label: "原始值",
-      aliases: ["rawValue", "wavelength", "wavelengthShift", "intensity"],
+      label: "OS265 测值",
+      aliases: ["rawValue", "intensity", "wavelength", "wavelengthShift"],
     },
   },
   vibrationDat: {
@@ -331,7 +331,7 @@ const overviewLoading = ref(false);
 const overviewError = ref("");
 
 const overviewQuery = reactive({
-  sensorId: "SENSOR_001",
+  sensorId: "FBG-STRAIN-CH2",
   startTime: getYearStartTime(),
   endTime: getCurrentTime(),
   limit: 50,
@@ -438,13 +438,14 @@ async function loadOverviewData() {
 }
 
 async function requestModuleHistory(moduleKey) {
+  const isFiberModule = moduleKey === "fiber";
   const payload = {
     sensorId: String(overviewQuery.sensorId).trim(),
-    startTime: overviewQuery.startTime,
-    endTime: overviewQuery.endTime,
-    limit: Number(overviewQuery.limit),
+    startTime: isFiberModule ? getMinutesAgoTime(5) : overviewQuery.startTime,
+    endTime: isFiberModule ? getCurrentTime() : overviewQuery.endTime,
+    limit: isFiberModule ? 300 : Number(overviewQuery.limit),
     page: 1,
-    size: Number(overviewQuery.limit),
+    size: isFiberModule ? 300 : Number(overviewQuery.limit),
   };
 
   try {
@@ -530,11 +531,11 @@ function readField(item, metric) {
 }
 
 function getSeries(module) {
-  return (overviewData[module.key] || [])
+  const series = (overviewData[module.key] || [])
     .map((item, index) => {
-      const value = Number(readField(item, module.metric));
+      const value = getPrimaryMetricValue(module, item);
 
-      if (Number.isNaN(value)) {
+      if (!Number.isFinite(value)) {
         return null;
       }
 
@@ -545,6 +546,12 @@ function getSeries(module) {
       };
     })
     .filter(Boolean);
+
+  if (module.key === "fiber") {
+    return filterFiberSeries(series);
+  }
+
+  return series;
 }
 
 function getChartStats(module) {
@@ -558,10 +565,11 @@ function getChartStats(module) {
   }
 
   const values = series.map((item) => item.value);
+  const bounds = getChartBounds(Math.min(...values), Math.max(...values));
 
   return {
-    min: formatAxisValue(Math.min(...values)),
-    max: formatAxisValue(Math.max(...values)),
+    min: formatAxisValue(bounds.min),
+    max: formatAxisValue(bounds.max),
   };
 }
 
@@ -578,14 +586,13 @@ function getChartPoints(module) {
   const endY = 124;
 
   const values = series.map((item) => item.value);
-  const minValue = Math.min(...values);
-  const maxValue = Math.max(...values);
-  const range = maxValue - minValue || 1;
+  const bounds = getChartBounds(Math.min(...values), Math.max(...values));
+  const range = bounds.max - bounds.min || 1;
   const stepX = series.length > 1 ? (endX - startX) / (series.length - 1) : 0;
 
   return series.map((item, index) => {
     const x = series.length === 1 ? (startX + endX) / 2 : startX + index * stepX;
-    const y = endY - ((item.value - minValue) / range) * (endY - startY);
+    const y = endY - ((item.value - bounds.min) / range) * (endY - startY);
 
     return {
       ...item,
@@ -662,6 +669,75 @@ function formatAxisValue(value) {
   }
 
   return numberValue.toFixed(2);
+}
+
+function getPrimaryMetricValue(module, item) {
+  if (module.key === "fiber") {
+    return getFiberPrimaryValue(item);
+  }
+
+  const value = Number(readField(item, module.metric));
+  return Number.isFinite(value) ? value : null;
+}
+
+function getFiberPrimaryValue(item) {
+  const rawValue = toFiniteNumber(item?.rawValue ?? item?.raw_value);
+  const intensity = toFiniteNumber(item?.intensity);
+
+  if (Number.isFinite(rawValue) && Math.abs(rawValue) < 100) {
+    return rawValue;
+  }
+
+  if (Number.isFinite(intensity)) {
+    return intensity;
+  }
+
+  return null;
+}
+
+function toFiniteNumber(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getChartBounds(minValue, maxValue) {
+  const range = maxValue - minValue;
+
+  if (range < 0.02) {
+    const center = (minValue + maxValue) / 2;
+    return {
+      min: center - 0.01,
+      max: center + 0.01,
+    };
+  }
+
+  const padding = Math.max(range * 0.1, 0.01);
+  return {
+    min: minValue - padding,
+    max: maxValue + padding,
+  };
+}
+
+function filterFiberSeries(series) {
+  if (series.length === 0) {
+    return series;
+  }
+
+  const values = series.map((item) => item.value).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+
+  if (values.length === 0) {
+    return [];
+  }
+
+  const middleIndex = Math.floor(values.length / 2);
+  const median =
+    values.length % 2 === 0 ? (values[middleIndex - 1] + values[middleIndex]) / 2 : values[middleIndex];
+
+  return series.filter((item) => Math.abs(item.value - median) <= 1);
+}
+
+function getMinutesAgoTime(minutes) {
+  return formatDateTime(new Date(Date.now() - minutes * 60 * 1000));
 }
 
 function openModule(module) {

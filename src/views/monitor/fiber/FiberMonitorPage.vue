@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h2 class="page-title">光纤原始监测</h2>
-        <p class="page-subtitle">OS-265 原始入口</p>
+        <p class="page-subtitle">OS265 通道数据源</p>
       </div>
       <div class="page-badge">FiberMonitorPage</div>
     </div>
@@ -13,8 +13,8 @@
     <section class="section-card">
       <div class="section-header">
         <div>
-          <h3 class="section-title">OS265 实时波长曲线</h3>
-          <p class="section-subtitle">最近 5 分钟，2 秒自动刷新，异常跳点仅在展示层过滤，原始数据仍保留。</p>
+          <h3 class="section-title">OS265 实时测值曲线</h3>
+          <p class="section-subtitle">最近 5 分钟，2 秒自动刷新；主曲线显示 OS265 软件测得的当前传感器值，波长保留为辅助参考。</p>
         </div>
         <span class="section-tag">realtime</span>
       </div>
@@ -25,8 +25,8 @@
           <div class="data-value">{{ realtimeSensorId }}</div>
         </div>
         <div class="data-item">
-          <div class="data-label">最新 wavelength/rawValue</div>
-          <div class="data-value">{{ latestWaveDisplay }}</div>
+          <div class="data-label">当前测值</div>
+          <div class="data-value">{{ latestPrimaryDisplay }}</div>
         </div>
         <div class="data-item">
           <div class="data-label">最新采集时间</div>
@@ -49,7 +49,7 @@
       <div v-if="realtimeErrorMessage" class="inline-error">{{ realtimeErrorMessage }}</div>
 
       <div v-if="chartPoints.length > 0" class="chart-box">
-        <svg class="trend-chart" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-label="OS265 实时波长曲线">
+        <svg class="trend-chart" viewBox="0 0 1000 320" preserveAspectRatio="none" role="img" aria-label="OS265 实时测值曲线">
           <line x1="70" y1="28" x2="70" y2="270" class="axis-line" />
           <line x1="70" y1="270" x2="960" y2="270" class="axis-line" />
 
@@ -95,7 +95,7 @@
             {{ point.shortTime }}
           </text>
 
-          <text x="18" y="20" class="chart-title-text">波长</text>
+          <text x="18" y="20" class="chart-title-text">OS265 测值</text>
           <text x="954" y="312" class="chart-title-text" text-anchor="end">采集时间</text>
         </svg>
 
@@ -112,7 +112,7 @@
       </div>
 
       <div v-else class="empty-block">
-        {{ realtimeLoading ? "实时曲线加载中..." : "暂无实时波长曲线数据" }}
+        {{ realtimeLoading ? "实时曲线加载中..." : "暂无实时测值曲线数据" }}
       </div>
     </section>
 
@@ -136,11 +136,11 @@
           <div class="data-value">{{ latestData.fiberNo || "-" }}</div>
         </div>
         <div class="data-item">
-          <div class="data-label">原始值</div>
+          <div class="data-label">当前测值</div>
           <div class="data-value">{{ formatDisplayValue(latestData.rawValue) }}</div>
         </div>
         <div class="data-item">
-          <div class="data-label">波长</div>
+          <div class="data-label">辅助波长</div>
           <div class="data-value">{{ formatDisplayValue(latestData.wavelength) }}</div>
         </div>
         <div class="data-item">
@@ -148,7 +148,7 @@
           <div class="data-value">{{ formatDisplayValue(latestData.wavelengthShift) }}</div>
         </div>
         <div class="data-item">
-          <div class="data-label">强度</div>
+          <div class="data-label">能量/测值</div>
           <div class="data-value">{{ formatDisplayValue(latestData.intensity) }}</div>
         </div>
         <div class="data-item data-item-wide">
@@ -171,10 +171,10 @@
               <th>传感器ID</th>
               <th>设备编号</th>
               <th>光纤编号</th>
-              <th>原始值</th>
-              <th>波长</th>
+              <th>当前测值</th>
+              <th>辅助波长</th>
               <th>波长变化</th>
-              <th>强度</th>
+              <th>能量</th>
               <th>采集时间</th>
               <th>标记</th>
             </tr>
@@ -242,12 +242,12 @@ const realtimeSensorId = computed(() => {
   return String(queryForm.value.sensorId || DEFAULT_SENSOR_ID).trim() || DEFAULT_SENSOR_ID;
 });
 
-const latestWaveDisplay = computed(() => {
+const latestPrimaryDisplay = computed(() => {
   if (!latestData.value) {
     return "-";
   }
 
-  const value = pickWaveValue(latestData.value);
+  const value = pickPrimaryValue(latestData.value);
   return formatDisplayValue(value);
 });
 
@@ -281,7 +281,7 @@ const historyMedian = computed(() => {
 });
 
 const latestIsOutlier = computed(() => {
-  const value = pickWaveValue(latestData.value);
+  const value = pickPrimaryValue(latestData.value);
 
   if (value === null || chartMedian.value === null) {
     return false;
@@ -429,7 +429,7 @@ function unwrap(response) {
 function buildNumericSeries(records) {
   return records
     .map((item, index) => {
-      const value = pickWaveValue(item);
+      const value = pickPrimaryValue(item);
 
       if (value === null) {
         return null;
@@ -446,10 +446,27 @@ function buildNumericSeries(records) {
     .sort((a, b) => String(a.collectTime).localeCompare(String(b.collectTime)));
 }
 
-function pickWaveValue(item) {
-  const candidate = item?.rawValue !== null && item?.rawValue !== undefined && item?.rawValue !== "" ? item.rawValue : item?.wavelength;
-  const numericValue = Number(candidate);
-  return Number.isFinite(numericValue) ? numericValue : null;
+function pickPrimaryValue(item) {
+  const rawValue = Number(item?.rawValue);
+  const intensity = Number(item?.intensity);
+  const wavelength = Number(item?.wavelength);
+
+  const hasRawValue = Number.isFinite(rawValue);
+  const hasIntensity = Number.isFinite(intensity);
+  const hasWavelength = Number.isFinite(wavelength);
+
+  if (hasRawValue) {
+    if (hasIntensity && hasWavelength && Math.abs(rawValue - wavelength) < 0.000001 && Math.abs(intensity - wavelength) > 0.1) {
+      return intensity;
+    }
+    return rawValue;
+  }
+
+  if (hasIntensity) {
+    return intensity;
+  }
+
+  return hasWavelength ? wavelength : null;
 }
 
 function calculateMedian(values) {
@@ -473,7 +490,7 @@ function isOutlierValue(value, median) {
 }
 
 function isHistoryOutlier(item) {
-  const value = pickWaveValue(item);
+  const value = pickPrimaryValue(item);
 
   if (value === null || historyMedian.value === null) {
     return false;

@@ -1,6 +1,6 @@
 <template>
   <section class="monitor-inner-nav">
-    <div class="category-row">
+    <div v-if="categories.length > 0" class="category-row">
       <button
         v-for="category in categories"
         :key="category.key"
@@ -36,7 +36,7 @@ defineOptions({
 defineProps({
   categories: {
     type: Array,
-    required: true,
+    default: () => [],
   },
   activeCategory: {
     type: String,

@@ -3,17 +3,17 @@
     <div v-if="!activeModule" class="overview-page">
       <div class="overview-header">
         <h2 class="overview-title">吊车梁监测系统</h2>
-        <p class="overview-subtitle">请选择监测模块进入数据页面</p>
+        <p class="overview-subtitle">六大业务监测模块 · 数据来源：OS265 统一数据源</p>
       </div>
 
       <section class="overview-query">
         <div class="query-item">
-          <label class="query-label">传感器ID</label>
+          <label class="query-label">传感器ID（可留空查询全部）</label>
           <input
             v-model="overviewQuery.sensorId"
             class="query-input"
             type="text"
-            placeholder="请输入 sensorId"
+            placeholder="可留空"
             @keyup.enter="loadOverviewData"
           />
         </div>
@@ -56,18 +56,18 @@
 
       <div class="module-card-grid">
         <button
-          v-for="module in allModules"
+          v-for="module in modules"
           :key="module.key"
           type="button"
           class="module-card"
-          @click="openModule(module)"
+          @click="openModule(module.key)"
         >
           <div class="card-header">
             <div>
               <div class="card-title">{{ module.label }}</div>
-              <div class="card-subtitle">Y轴：{{ module.metric.label }}</div>
+              <div class="card-subtitle">Y轴：测值（OS265 主值）</div>
             </div>
-            <span class="card-count">{{ getSeries(module).length }} 点</span>
+            <span class="card-count">{{ getSeries(module.key).length }} 点</span>
           </div>
 
           <div class="chart-wrap">
@@ -75,19 +75,18 @@
               <line x1="52" y1="20" x2="52" y2="130" class="axis-line" />
               <line x1="52" y1="130" x2="280" y2="130" class="axis-line" />
 
-              <text x="8" y="25" class="axis-value">{{ getChartStats(module).max }}</text>
-              <text x="8" y="132" class="axis-value">{{ getChartStats(module).min }}</text>
+              <text x="8" y="25" class="axis-value">{{ getCardStats(module.key).max }}</text>
+              <text x="8" y="132" class="axis-value">{{ getCardStats(module.key).min }}</text>
               <text x="148" y="160" class="axis-title">X轴：采集时间</text>
-              <text x="14" y="86" class="axis-title vertical-axis">{{ module.metric.label }}</text>
 
               <polyline
-                v-if="getChartPoints(module).length > 1"
-                :points="getPolyline(module)"
+                v-if="getCardPoints(module.key).length > 1"
+                :points="getCardPolyline(module.key)"
                 class="chart-polyline"
               />
 
               <circle
-                v-for="point in getChartPoints(module)"
+                v-for="point in getCardPoints(module.key)"
                 :key="point.key"
                 :cx="point.x"
                 :cy="point.y"
@@ -95,35 +94,35 @@
                 class="chart-point"
               />
 
-              <text v-if="getChartPoints(module).length > 0" x="52" y="146" class="time-label">
-                {{ getFirstTime(module) }}
+              <text v-if="getCardPoints(module.key).length > 0" x="52" y="146" class="time-label">
+                {{ getFirstTime(module.key) }}
               </text>
 
               <text
-                v-if="getChartPoints(module).length > 1"
+                v-if="getCardPoints(module.key).length > 1"
                 x="280"
                 y="146"
                 text-anchor="end"
                 class="time-label"
               >
-                {{ getLastTime(module) }}
+                {{ getLastTime(module.key) }}
               </text>
 
               <text
-                v-if="getChartPoints(module).length === 0"
+                v-if="getCardPoints(module.key).length === 0"
                 x="166"
                 y="82"
                 text-anchor="middle"
                 class="empty-chart-text"
               >
-                {{ overviewLoading ? "数据加载中..." : "暂无历史数据" }}
+                {{ overviewLoading ? "数据加载中..." : "暂无已映射通道数据" }}
               </text>
             </svg>
           </div>
 
           <div class="card-footer">
-            <span>最新值：{{ getLatestValue(module) }}</span>
-            <span>{{ getLatestTime(module) }}</span>
+            <span>最新值：{{ getLatestValue(module.key) }}</span>
+            <span>{{ getLatestTime(module.key) }}</span>
           </div>
         </button>
       </div>
@@ -132,29 +131,25 @@
     <div v-else class="detail-page">
       <div class="page-header">
         <div>
-          <h2 class="page-title">{{ activeModuleLabel }}</h2>
+          <h2 class="page-title">{{ activeModuleConfig.label }}</h2>
           <p class="page-subtitle">{{ activeModuleConfig.desc }}</p>
         </div>
 
         <div class="page-actions">
           <button type="button" class="back-btn" @click="backToOverview">返回模块总览</button>
-          <span class="page-badge">{{ activeCategoryLabel }}</span>
-          <span class="page-badge page-badge-dark">V{{ activeModuleConfig.version }}</span>
+          <span class="page-badge">统一数据源</span>
         </div>
       </div>
 
       <MonitorInnerNav
-        :categories="categories"
-        :active-category="activeCategory"
-        :modules="currentModules"
+        :modules="navModules"
         :active-module="activeModule"
-        @change-category="handleCategoryChange"
         @change-module="handleModuleChange"
       />
 
       <section class="module-content">
         <transition name="fade" mode="out-in">
-          <component :is="activeComponent" :key="activeModule" />
+          <MonitorModulePage :key="activeModule" :module-key="activeModule" />
         </transition>
       </section>
     </div>
@@ -162,211 +157,49 @@
 </template>
 
 <script setup>
-import axios from "axios";
-import { computed, defineAsyncComponent, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import MonitorInnerNav from "@/components/monitor/MonitorInnerNav.vue";
+import MonitorModulePage from "@/components/monitor/MonitorModulePage.vue";
+import { fetchModuleHistory, unwrapResultData } from "@/api/monitorData";
+import { MONITOR_MODULES, getModuleConfig } from "@/utils/monitor/moduleConfig";
+import { buildOs265NumericSeries, formatOs265Value } from "@/utils/os265Value";
+import {
+  buildChartPoints,
+  buildPolyline,
+  formatShortTime,
+  getChartBounds,
+} from "@/utils/monitor/chartGeometry";
 
-const moduleConfigs = {
-  displacement: {
-    label: "位移数据（mm）",
-    shortLabel: "位移",
-    component: "Displacement",
-    desc: "传感器直采位移数据实时监控",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "verticalDeflection",
-      label: "位移 / 垂向挠度",
-      aliases: [
-        "verticalDeflection",
-        "displacementValue",
-        "horizontalDisplacement",
-        "midspanDisplacement",
-      ],
-    },
-  },
-  acceleration: {
-    label: "加速度数据",
-    shortLabel: "加速度",
-    component: "Acceleration",
-    desc: "传感器直采加速度数据实时监控",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "accelerationValue",
-      label: "加速度值",
-      aliases: ["accelerationValue", "acceleration"],
-    },
-  },
-  strain: {
-    label: "应变数据",
-    shortLabel: "应变",
-    component: "Strain",
-    desc: "传感器直采应变数据实时监控",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "microStrain",
-      label: "微应变",
-      aliases: ["microStrain", "strainValue", "keyPointStrain"],
-    },
-  },
-  vibration: {
-    label: "振动数据",
-    shortLabel: "振动",
-    component: "Vibration",
-    desc: "传感器直采振动数据实时监控",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "amplitude",
-      label: "振幅",
-      aliases: ["amplitude", "vibrationValue", "frequency", "acceleration"],
-    },
-  },
-  vibratingWire: {
-    label: "振弦原始数据",
-    shortLabel: "振弦",
-    component: "VibratingWire",
-    desc: "振弦采集仪原始接入与查询",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "frequency",
-      label: "频率",
-      aliases: ["frequency", "temperature", "tension", "strainValue"],
-    },
-  },
-  fiber: {
-    label: "OS265 测值数据",
-    shortLabel: "OS265",
-    component: "Fiber",
-    desc: "数据来源：OS265 通道数据；能量/测值用于当前业务显示，波长保留为辅助参考",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "rawValue",
-      label: "OS265 测值",
-      aliases: ["rawValue", "intensity", "wavelength", "wavelengthShift"],
-    },
-  },
-  vibrationDat: {
-    label: "振动DAT",
-    shortLabel: "DAT",
-    component: "VibrationDat",
-    desc: "振动 DAT 文件级接入与查询",
-    version: "1.0",
-    category: "direct",
-    metric: {
-      key: "fileSize",
-      label: "文件大小",
-      aliases: ["fileSize", "sampleRate", "channelCount", "pointCount", "durationSeconds"],
-    },
-  },
-  deflection: {
-    label: "挠度数据（mm）",
-    shortLabel: "挠度",
-    component: "Deflection",
-    desc: "计算结果类挠度数据监控",
-    version: "1.0",
-    category: "calc",
-    metric: {
-      key: "deflectionValue",
-      label: "挠度值",
-      aliases: ["deflectionValue", "verifiedDeflection", "calcDeflection", "verticalDeflection"],
-    },
-  },
-  stress: {
-    label: "应力数据（MPa）",
-    shortLabel: "应力",
-    component: "Stress",
-    desc: "计算结果类应力数据监控",
-    version: "2.0",
-    category: "calc",
-    metric: {
-      key: "principalStress",
-      label: "主应力",
-      aliases: ["principalStress", "verifiedStress", "calcStress", "equivalentStress"],
-    },
-  },
-};
+defineOptions({
+  name: "MonitorCenterPage",
+});
 
-const categories = [
-  { key: "direct", label: "传感器直采" },
-  { key: "calc", label: "计算结果" },
-];
+// The exact six business modules; no fiber/vibratingWire/vibrationDat cards.
+const modules = MONITOR_MODULES;
 
-const moduleMap = {
-  direct: ["displacement", "acceleration", "strain", "vibration", "vibratingWire", "fiber", "vibrationDat"],
-  calc: ["deflection", "stress"],
-};
-
-const allModules = computed(() => [
-  { key: "displacement", ...moduleConfigs.displacement },
-  { key: "acceleration", ...moduleConfigs.acceleration },
-  { key: "strain", ...moduleConfigs.strain },
-  { key: "vibration", ...moduleConfigs.vibration },
-  { key: "vibratingWire", ...moduleConfigs.vibratingWire },
-  { key: "fiber", ...moduleConfigs.fiber },
-  { key: "vibrationDat", ...moduleConfigs.vibrationDat },
-  { key: "deflection", ...moduleConfigs.deflection },
-  { key: "stress", ...moduleConfigs.stress },
-]);
-
-const componentsMap = {
-  Displacement: defineAsyncComponent(() => import("./displacement/DisplacementMonitorPage.vue")),
-  Acceleration: defineAsyncComponent(() => import("./acceleration/AccelerationMonitorPage.vue")),
-  Strain: defineAsyncComponent(() => import("./strain/StrainMonitorPage.vue")),
-  Vibration: defineAsyncComponent(() => import("./vibration/VibrationMonitorPage.vue")),
-  VibratingWire: defineAsyncComponent(() => import("./vibrating-wire/VibratingWireMonitorPage.vue")),
-  Fiber: defineAsyncComponent(() => import("./fiber/FiberMonitorPage.vue")),
-  VibrationDat: defineAsyncComponent(() => import("./vibration-dat/VibrationDatMonitorPage.vue")),
-  Deflection: defineAsyncComponent(() => import("./deflection/DeflectionMonitorPage.vue")),
-  Stress: defineAsyncComponent(() => import("./stress/StressMonitorPage.vue")),
-};
-
-const activeCategory = ref("direct");
 const activeModule = ref("");
 const overviewLoading = ref(false);
 const overviewError = ref("");
 
 const overviewQuery = reactive({
-  sensorId: "FBG-STRAIN-CH2",
+  sensorId: "",
   startTime: getYearStartTime(),
   endTime: getCurrentTime(),
   limit: 50,
 });
 
-const overviewData = reactive({
-  displacement: [],
-  acceleration: [],
-  strain: [],
-  vibration: [],
-  vibratingWire: [],
-  fiber: [],
-  vibrationDat: [],
-  deflection: [],
-  stress: [],
-});
-
-const timePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
-
-const currentModules = computed(() => {
-  return (moduleMap[activeCategory.value] || []).map((key) => ({
-    key,
-    label: moduleConfigs[key]?.shortLabel || moduleConfigs[key]?.label || key,
-  }));
-});
-
-const activeModuleConfig = computed(() => moduleConfigs[activeModule.value] || {});
-const activeModuleLabel = computed(() => activeModuleConfig.value.label || "模块页面");
-const activeCategoryLabel = computed(
-  () => categories.find((item) => item.key === activeCategory.value)?.label || "监测数据",
+const overviewData = reactive(
+  Object.fromEntries(modules.map((module) => [module.key, []])),
 );
 
-const activeComponent = computed(() => {
-  return componentsMap[activeModuleConfig.value.component] || null;
-});
+const timePattern = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+const cardBox = { startX: 58, endX: 276, startY: 26, endY: 124 };
+
+const navModules = computed(() =>
+  modules.map((module) => ({ key: module.key, label: module.shortLabel })),
+);
+
+const activeModuleConfig = computed(() => getModuleConfig(activeModule.value) || {});
 
 onMounted(() => {
   loadOverviewData();
@@ -383,8 +216,7 @@ function formatDateTime(date) {
 }
 
 function getYearStartTime() {
-  const now = new Date();
-  return `${now.getFullYear()}-01-01 00:00:00`;
+  return `${new Date().getFullYear()}-01-01 00:00:00`;
 }
 
 function getCurrentTime() {
@@ -392,21 +224,14 @@ function getCurrentTime() {
 }
 
 function validateOverviewQuery() {
-  if (!overviewQuery.sensorId || !String(overviewQuery.sensorId).trim()) {
-    overviewError.value = "传感器ID不能为空";
-    return false;
-  }
-
   if (!timePattern.test(overviewQuery.startTime)) {
     overviewError.value = "开始时间格式必须为 yyyy-MM-dd HH:mm:ss";
     return false;
   }
-
   if (!timePattern.test(overviewQuery.endTime)) {
     overviewError.value = "结束时间格式必须为 yyyy-MM-dd HH:mm:ss";
     return false;
   }
-
   if (overviewQuery.startTime > overviewQuery.endTime) {
     overviewError.value = "开始时间不能大于结束时间";
     return false;
@@ -422,11 +247,10 @@ async function loadOverviewData() {
   }
 
   overviewLoading.value = true;
-  overviewError.value = "";
 
   try {
     await Promise.all(
-      allModules.value.map(async (module) => {
+      modules.map(async (module) => {
         overviewData[module.key] = await requestModuleHistory(module.key);
       }),
     );
@@ -438,327 +262,78 @@ async function loadOverviewData() {
 }
 
 async function requestModuleHistory(moduleKey) {
-  const isFiberModule = moduleKey === "fiber";
+  const sensorId = String(overviewQuery.sensorId || "").trim();
   const payload = {
-    sensorId: String(overviewQuery.sensorId).trim(),
-    startTime: isFiberModule ? getMinutesAgoTime(5) : overviewQuery.startTime,
-    endTime: isFiberModule ? getCurrentTime() : overviewQuery.endTime,
-    limit: isFiberModule ? 300 : Number(overviewQuery.limit),
-    page: 1,
-    size: isFiberModule ? 300 : Number(overviewQuery.limit),
+    ...(sensorId ? { sensorId } : {}),
+    startTime: overviewQuery.startTime,
+    endTime: overviewQuery.endTime,
+    limit: Number(overviewQuery.limit),
   };
 
   try {
-    const postResponse = await axios.post(`/api/data/${moduleKey}/history`, payload, {
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    return normalizeArray(unwrapResultData(postResponse));
-  } catch (postError) {
-    const status = postError?.response?.status;
-
-    if (status && status !== 404 && status !== 405) {
-      return [];
-    }
-
-    try {
-      const getResponse = await axios.get(`/api/data/${moduleKey}/history`, {
-        params: payload,
-      });
-
-      return normalizeArray(unwrapResultData(getResponse));
-    } catch {
-      return [];
-    }
+    const response = await fetchModuleHistory(moduleKey, payload);
+    const data = unwrapResultData(response);
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
   }
 }
 
-function unwrapResultData(response) {
-  const responseData = response?.data;
-
-  if (responseData && typeof responseData === "object" && "data" in responseData) {
-    return responseData.data;
-  }
-
-  return responseData;
+function getSeries(moduleKey) {
+  return buildOs265NumericSeries(overviewData[moduleKey] || []);
 }
 
-function normalizeArray(data) {
-  if (Array.isArray(data)) {
-    return data;
-  }
-
-  if (data && Array.isArray(data.records)) {
-    return data.records;
-  }
-
-  if (data && Array.isArray(data.rows)) {
-    return data.rows;
-  }
-
-  if (data && Array.isArray(data.list)) {
-    return data.list;
-  }
-
-  if (data && Array.isArray(data.content)) {
-    return data.content;
-  }
-
-  return [];
+function getCardPoints(moduleKey) {
+  return buildChartPoints(getSeries(moduleKey), cardBox);
 }
 
-function toSnakeCase(value) {
-  return String(value).replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`);
+function getCardPolyline(moduleKey) {
+  return buildPolyline(getCardPoints(moduleKey));
 }
 
-function readField(item, metric) {
-  const keys = metric.aliases || [metric.key];
-
-  for (const key of keys) {
-    if (item?.[key] !== undefined && item?.[key] !== null && item?.[key] !== "") {
-      return item[key];
-    }
-
-    const snakeKey = toSnakeCase(key);
-    if (item?.[snakeKey] !== undefined && item?.[snakeKey] !== null && item?.[snakeKey] !== "") {
-      return item[snakeKey];
-    }
-  }
-
-  return null;
-}
-
-function getSeries(module) {
-  const series = (overviewData[module.key] || [])
-    .map((item, index) => {
-      const value = getPrimaryMetricValue(module, item);
-
-      if (!Number.isFinite(value)) {
-        return null;
-      }
-
-      return {
-        key: `${module.key}-${item.sensorId || "sensor"}-${item.collectTime || index}-${index}`,
-        value,
-        collectTime: item.collectTime || item.collect_time || "",
-      };
-    })
-    .filter(Boolean);
-
-  if (module.key === "fiber") {
-    return filterFiberSeries(series);
-  }
-
-  return series;
-}
-
-function getChartStats(module) {
-  const series = getSeries(module);
-
+function getCardStats(moduleKey) {
+  const series = getSeries(moduleKey);
   if (series.length === 0) {
-    return {
-      min: "-",
-      max: "-",
-    };
+    return { min: "-", max: "-" };
   }
-
-  const values = series.map((item) => item.value);
-  const bounds = getChartBounds(Math.min(...values), Math.max(...values));
-
+  const bounds = getChartBounds(series.map((item) => item.value));
   return {
-    min: formatAxisValue(bounds.min),
-    max: formatAxisValue(bounds.max),
+    min: formatOs265Value(bounds.min),
+    max: formatOs265Value(bounds.max),
   };
 }
 
-function getChartPoints(module) {
-  const series = getSeries(module);
-
-  if (series.length === 0) {
-    return [];
-  }
-
-  const startX = 58;
-  const endX = 276;
-  const startY = 26;
-  const endY = 124;
-
-  const values = series.map((item) => item.value);
-  const bounds = getChartBounds(Math.min(...values), Math.max(...values));
-  const range = bounds.max - bounds.min || 1;
-  const stepX = series.length > 1 ? (endX - startX) / (series.length - 1) : 0;
-
-  return series.map((item, index) => {
-    const x = series.length === 1 ? (startX + endX) / 2 : startX + index * stepX;
-    const y = endY - ((item.value - bounds.min) / range) * (endY - startY);
-
-    return {
-      ...item,
-      x,
-      y,
-    };
-  });
+function getFirstTime(moduleKey) {
+  return formatShortTime(getSeries(moduleKey)[0]?.collectTime);
 }
 
-function getPolyline(module) {
-  return getChartPoints(module)
-    .map((point) => `${point.x},${point.y}`)
-    .join(" ");
-}
-
-function getFirstTime(module) {
-  const series = getSeries(module);
-  return formatShortTime(series[0]?.collectTime);
-}
-
-function getLastTime(module) {
-  const series = getSeries(module);
+function getLastTime(moduleKey) {
+  const series = getSeries(moduleKey);
   return formatShortTime(series[series.length - 1]?.collectTime);
 }
 
-function getLatestValue(module) {
-  const series = getSeries(module);
+function getLatestValue(moduleKey) {
+  const series = getSeries(moduleKey);
   const latest = series[series.length - 1];
-
-  if (!latest) {
-    return "-";
-  }
-
-  return formatAxisValue(latest.value);
+  return latest ? formatOs265Value(latest.value) : "-";
 }
 
-function getLatestTime(module) {
-  const series = getSeries(module);
+function getLatestTime(moduleKey) {
+  const series = getSeries(moduleKey);
   const latest = series[series.length - 1];
-
-  if (!latest) {
-    return "暂无时间";
-  }
-
-  return formatShortTime(latest.collectTime);
+  return latest ? formatShortTime(latest.collectTime) : "暂无时间";
 }
 
-function formatShortTime(value) {
-  if (!value || typeof value !== "string") {
-    return "--";
-  }
-
-  const parts = value.split(" ");
-  return parts.length === 2 ? parts[1] : value;
-}
-
-function formatAxisValue(value) {
-  if (value === null || value === undefined || value === "") {
-    return "-";
-  }
-
-  const numberValue = Number(value);
-
-  if (Number.isNaN(numberValue)) {
-    return String(value);
-  }
-
-  if (Math.abs(numberValue) >= 1000) {
-    return numberValue.toFixed(0);
-  }
-
-  if (Math.abs(numberValue) >= 100) {
-    return numberValue.toFixed(1);
-  }
-
-  return numberValue.toFixed(2);
-}
-
-function getPrimaryMetricValue(module, item) {
-  if (module.key === "fiber") {
-    return getFiberPrimaryValue(item);
-  }
-
-  const value = Number(readField(item, module.metric));
-  return Number.isFinite(value) ? value : null;
-}
-
-function getFiberPrimaryValue(item) {
-  const rawValue = toFiniteNumber(item?.rawValue ?? item?.raw_value);
-  const intensity = toFiniteNumber(item?.intensity);
-
-  if (Number.isFinite(rawValue) && Math.abs(rawValue) < 100) {
-    return rawValue;
-  }
-
-  if (Number.isFinite(intensity)) {
-    return intensity;
-  }
-
-  return null;
-}
-
-function toFiniteNumber(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function getChartBounds(minValue, maxValue) {
-  const range = maxValue - minValue;
-
-  if (range < 0.02) {
-    const center = (minValue + maxValue) / 2;
-    return {
-      min: center - 0.01,
-      max: center + 0.01,
-    };
-  }
-
-  const padding = Math.max(range * 0.1, 0.01);
-  return {
-    min: minValue - padding,
-    max: maxValue + padding,
-  };
-}
-
-function filterFiberSeries(series) {
-  if (series.length === 0) {
-    return series;
-  }
-
-  const values = series.map((item) => item.value).filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
-
-  if (values.length === 0) {
-    return [];
-  }
-
-  const middleIndex = Math.floor(values.length / 2);
-  const median =
-    values.length % 2 === 0 ? (values[middleIndex - 1] + values[middleIndex]) / 2 : values[middleIndex];
-
-  return series.filter((item) => Math.abs(item.value - median) <= 1);
-}
-
-function getMinutesAgoTime(minutes) {
-  return formatDateTime(new Date(Date.now() - minutes * 60 * 1000));
-}
-
-function openModule(module) {
-  activeModule.value = module.key;
-  activeCategory.value = module.category;
+function openModule(moduleKey) {
+  activeModule.value = moduleKey;
 }
 
 function backToOverview() {
   activeModule.value = "";
 }
 
-function handleCategoryChange(key) {
-  activeCategory.value = key;
-  const firstModule = moduleMap[key]?.[0];
-  if (firstModule) {
-    activeModule.value = firstModule;
-  }
-}
-
-function handleModuleChange(key) {
-  activeModule.value = key;
+function handleModuleChange(moduleKey) {
+  activeModule.value = moduleKey;
 }
 </script>
 
@@ -937,10 +512,6 @@ function handleModuleChange(key) {
   fill: #4b5563;
 }
 
-.vertical-axis {
-  writing-mode: tb;
-}
-
 .chart-polyline {
   fill: none;
   stroke: #2563eb;
@@ -1026,11 +597,6 @@ function handleModuleChange(key) {
   color: #3730a3;
   font-size: 12px;
   font-weight: 600;
-}
-
-.page-badge-dark {
-  background: #111827;
-  color: #ffffff;
 }
 
 .module-content {
